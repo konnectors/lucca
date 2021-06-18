@@ -11,12 +11,12 @@ const request = requestFactory({
   json: true,
   jar: true
 })
-const moment = require('moment')
-moment.locale('fr')
+const parseISO = require('date-fns/parseISO')
+const format = require('date-fns/format')
+const cheerio = require('cheerio')
 
 const baseStartUrl = 'https://www.lucca.fr'
 let companyInstanceUrl
-let userLogin
 
 module.exports = new BaseKonnector(start)
 // The start function is run by the BaseKonnector instance only when it got all the account
@@ -57,7 +57,6 @@ async function checkLoginInfos(fields) {
   ) {
     log('info', 'loginUrl exists, so use it and skip fetching company details')
     companyInstanceUrl = fields.loginUrl
-    userLogin = fields.login
   } else {
     log(
       'info',
@@ -73,8 +72,7 @@ async function checkLoginInfos(fields) {
           request: 'emailpass'
         }
       })
-      companyInstanceUrl = details.data.user.instance.href
-      userLogin = details.data.user.login
+      companyInstanceUrl = details.data[0]
     } catch (err) {
       if (
         err.statusCode === 404 &&
@@ -91,15 +89,26 @@ async function checkLoginInfos(fields) {
 }
 
 async function logIn(fields) {
+  log('info', "Get the verification token hidden in the company's login's form")
+  const form = await request({
+    uri: companyInstanceUrl + '/identity/login',
+    method: 'GET'
+  })
+  const $ = cheerio.load(form)
+  const requestVerificationToken = $(
+    'input[name="__RequestVerificationToken"]'
+  ).attr('value')
+
   log('info', 'Log in with company URL')
   try {
     await request({
-      uri: companyInstanceUrl + '/login',
+      uri: companyInstanceUrl + '/identity/login',
       method: 'POST',
       form: {
-        login: userLogin,
+        UserName: fields.login,
         Password: fields.password,
-        PersistentCookie: true
+        IsPersistent: true,
+        __RequestVerificationToken: requestVerificationToken
       }
     })
   } catch (err) {
@@ -132,8 +141,8 @@ async function getPayslips() {
 
   return payslipsInfos.data.items.map(function(payslip) {
     const url = companyInstanceUrl + '/pagga/services/download/' + payslip.id
-    const date = moment(payslip.import.endDate, moment.ISO_8601)
-    const filename = date.format('YYYY_MM') + '.pdf'
+    const date = parseISO(payslip.import.endDate)
+    const filename = format(date, 'yyyy_MM') + '.pdf'
 
     return {
       fileurl: url,
